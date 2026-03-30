@@ -11,8 +11,6 @@ bool pressed = false;
 bool apModeActive = false;
 
 unsigned long last = 0;
-float power = 0.0;
-float lastPower = 0.0;
 unsigned long lastChangeTime = 0;            // เวลาเปลี่ยนแปลงล่าสุด (ms)
 const unsigned long timeout = 5 * 60 * 1000; // 5 นาที (300,000 ms)
 
@@ -165,65 +163,31 @@ void setupWiFiMode()
 {
     if (wifimode == 0)
     {
-        Serial.println("📡 Setting WiFi to ACCESS POINT mode");
+        Serial.println("📡 AP Mode");
 
-        // ตั้งค่าโหมด AP
         ledMode = LED_AP_MODE;
         WiFi.mode(WIFI_AP);
 
-        // กำหนดค่า IP ของ AP
-        IPAddress local_IP(192, 168, 4, 1);
-        IPAddress gateway(192, 168, 4, 1);
+        IPAddress ip(192, 168, 4, 1);
         IPAddress subnet(255, 255, 255, 0);
 
-        if (!WiFi.softAPConfig(local_IP, gateway, subnet))
-        {
-            Serial.println("❌ Failed to configure AP");
-        }
-        if (WiFi.softAP(DEVICE_NAME, DEVICE_PASS))
-        {
-            Serial.println("✅ AP Started");
-            Serial.print("AP IP address: ");
-            Serial.println(WiFi.softAPIP());
-        }
-        else
-        {
-            Serial.println("❌ Failed to start AP");
-        }
-        esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-        if (ap_netif)
-        {
-            esp_netif_dhcps_stop(ap_netif);
-            esp_netif_ip_info_t ip_info;
-            ip_info.ip.addr = (uint32_t)local_IP;
-            ip_info.gw.addr = (uint32_t)gateway;
-            ip_info.netmask.addr = (uint32_t)subnet;
-            esp_netif_set_ip_info(ap_netif, &ip_info);
-            if (esp_netif_dhcps_start(ap_netif) == ESP_OK)
-            {
-                Serial.println("✅ DHCP server started (esp_netif)");
-            }
-            else
-            {
-                Serial.println("❌ Failed to start DHCP server");
-            }
-        }
-        else
-        {
-            Serial.println("❌ Failed to get AP netif handle");
-        }
-    }
+        WiFi.softAPConfig(ip, ip, subnet);
+        WiFi.softAP(DEVICE_NAME, DEVICE_PASS);
 
-    if (wifimode == 1)
+        Serial.print("AP IP: ");
+        Serial.println(WiFi.softAPIP());
+    }
+    else
     {
-        Serial.println("📡 Setting WiFi to STATION mode");
-        ledMode = LED_BUSY;
+        Serial.println("📡 STA Mode");
+
+        ledMode = LED_DISCONNECTED;
         WiFi.mode(WIFI_STA);
-        WiFi.setSleep(false); // ⭐ สำคัญ
+        WiFi.setSleep(false);
         WiFi.begin(WIFI_NAME, PASSWORD);
     }
 
-    delay(1000);
+    delay(500);
 }
 
 void setupIPConfig()
