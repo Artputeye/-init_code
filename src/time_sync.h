@@ -1,6 +1,6 @@
 #ifndef NTPSERVER_H
 #define NTPSERVER_H
-#include "globals.h"
+#include "config.h"
 
 struct DateTimeCache
 {

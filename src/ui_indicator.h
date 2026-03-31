@@ -1,6 +1,6 @@
 #ifndef LED_STATUS_H
 #define LED_STATUS_H
-#include "globals.h"
+#include "config.h"
 
 enum LedMode {
     LED_OFF,

@@ -1,4 +1,4 @@
-#include "ledStatus.h"
+#include "ui_indicator.h"
 
 volatile LedMode ledMode = LED_DISCONNECTED; 
 
@@ -14,7 +14,7 @@ void ledIndicator(unsigned long onTime, unsigned long offTime)
     {
         previousMillis = currentMillis;
         ledState = !ledState;
-        digitalWrite(LED, ledState ? HIGH : LOW);
+        digitalWrite(STATUS_LED, ledState ? HIGH : LOW);
     }
 }
 

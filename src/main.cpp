@@ -1,160 +1,133 @@
-// main.cpp
-#include "globals.h"
+#include "config.h"
 
-WiFiClient client;           // home assistant
-HADevice device;             // home assistant
-HAMqtt mqtt(client, device); // home assistant ต้องประกาศ Object ใน main.cpp เท่านั้น ไม่งั้น mqtt broker หาไม่เจอ
+// --- Global Objects Definition ---
+// ประกาศที่นี่ที่เดียวเพื่อให้ Linker หาเจอได้ง่าย
+WiFiClient client;
+HADevice device;
+HAMqtt mqtt(client, device); 
 
+// --- Function Prototypes ---
 void TaskMain(void *pvParameters);
 void TaskSub(void *pvParameters);
 void TaskLED(void *pvParameters);
-void TaskNTP(void *pvParameters); // Task สำหรับ sync NTP
 
-void setup()
-{
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, HIGH);
-  pinMode(AP_PIN, INPUT_PULLUP);
-  // === Serial Setup ===
-  Serial.begin(115200);
-  while (!Serial)
-    ;
-  Serial.print("Booting");
-  for (int i = 0; i < 5; i++)
-  {
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.println("Serial Setup Completed");
-  delay(300);
+void setup() {
+    // 1. Initial HW & Debug
+    pinMode(STATUS_LED, OUTPUT);
+    digitalWrite(STATUS_LED, HIGH);
+    pinMode(AP_PIN, INPUT_PULLUP);
 
-  // === File System Setup ===
-  if (!LittleFS.begin(true))
-  {
-    Serial.println("LittleFS Mount Failed");
-    return;
-  }
-  Serial.println("LittleFS Mounted Successfully");
-  delay(300);
+    Serial.begin(115200);
+    // ไม่ควรใช้ while(!Serial) นานเกินไปในโปรดักชัน เพราะถ้าไม่ต่อคอมเครื่องจะค้าง
+    unsigned long startSerial = millis();
+    while (!Serial && millis() - startSerial < 3000); 
+    
+    Serial.println(F("\n[System] Booting..."));
 
-  // === Device Configuration ===
-  mac_config();
-  WiFi.onEvent(WiFiEvent);
-  wifi_Setup();
-  /////////////////////////////////////////////////////
-
-  iotHAsetup();
-  Serial.println("Home Assistant Initialized");
-  delay(300);
-
-  ////////////////////////////////////////////////////////////////////////////
-
-  // === mDNS & Web Setup ===
-  MDNS.begin(HOST);
-  Serial.println("mDNS Responder Started");
-  delay(300);
-
-  webHandle();
-  initWebSocket();
-  server.begin();
-  Serial.println("Web Server Started");
-  delay(300);
-
-  // === NTP Setup ===
-  NTPbegin();
-  Serial.println("NTP Server Configured");
-  delay(300);
-
-  // === Watchdog Setup ===
-  esp_task_wdt_init(WDT_TIMEOUT, true); // Enable WDT with system reset
-  esp_task_wdt_delete(NULL);            // Remove loopTask from WDT
-  // esp_task_wdt_add(NULL);            // (Don't add loopTask if it's unused)
-
-  // === Task Creation ===
-  TaskHandle_t xHandleMain = NULL;
-  TaskHandle_t xHandleSub = NULL;
-  TaskHandle_t xHandleLED = NULL;
-  TaskHandle_t xHandleNTP = NULL;
-
-  xTaskCreatePinnedToCore(
-      TaskMain, "TaskMain", 4096, NULL, 1, &xHandleMain, 0);
-  xTaskCreatePinnedToCore(
-      TaskSub, "TaskSub", 3000, NULL, 1, &xHandleSub, 1);
-  xTaskCreatePinnedToCore(
-      TaskLED, "TaskLED", 2048, NULL, 1, &xHandleLED, 1);
-
-  // === Add tasks to Watchdog ===
-  esp_task_wdt_add(xHandleMain);
-  esp_task_wdt_add(xHandleSub);
-
-  Serial.println("Setup Complete");
-}
-
-void loop()
-{
-  esp_task_wdt_reset();
-  delay(100);
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////
-void TaskMain(void *pvParameters) // CPU Core0
-{
-  while (1)
-  {
-    unsigned long last = 0;
-    unsigned long lastDiagnostic = 0;
-    // Main function
-    operation();
-    // Home Assistant Diagnostic update every 60 seconds
-    if ((millis() - lastDiagnostic) > 60 * 1000)
-    {
-      lastDiagnostic = millis();
-      HA_Diagnostic();
+    // 2. Storage Setup
+    if (!LittleFS.begin(true)) {
+        Serial.println(F("❌ LittleFS Mount Failed"));
+    } else {
+        Serial.println(F("✅ LittleFS Mounted"));
     }
 
-    if ((millis() - last) > 10000)
-    {
-      last = millis();
-      UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);
+    // 3. Network & Config Setup
+    mac_config();
+    WiFi.onEvent(WiFiEvent);
+    wifi_Setup();
+    
+    // 4. Services Setup
+    iotHAsetup();
+    
+    if (MDNS.begin(HOSTNAME)) {
+        Serial.printf("[System] mDNS Started: %s.local\n", HOSTNAME);
     }
-    esp_task_wdt_reset();
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+
+    initWebRoutes();
+    initWebSocket();
+    server.begin();
+
+    NTPbegin();
+
+    // 5. Watchdog Configuration (ESP32-IDF Style)
+    // หมายเหตุ: หากใช้ ESP32 Core 3.x ขึ้นไป อาจต้องปรับ syntax ตามที่แจ้งในรอบก่อน
+    esp_task_wdt_init(WDT_TIMEOUT, true);
+    esp_task_wdt_delete(NULL); // ไม่ใช้ Loop() หลักคุม WDT
+
+    // 6. Task Creation (แบ่งโหลดความสำคัญ)
+    // Core 0: งานหลัก (Processing/Operation)
+    // Core 1: งานสื่อสาร (WiFi/MQTT/Web) และ UI (LED)
+    xTaskCreatePinnedToCore(TaskMain, "Main", 4096, NULL, 2, NULL, 0); 
+    xTaskCreatePinnedToCore(TaskSub,  "Sub",  4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(TaskLED,  "LED",  2048, NULL, 1, NULL, 1);
+
+    Serial.println(F("[System] Setup Complete"));
 }
 
-/////////////////////////////////////////////////////////////////////////////////////////////
-void TaskSub(void *pvParameters) // CPU Core1
-{
-  unsigned long lastStack = 0;
-  while (1)
-  {
-    fileManage();
-    mqtt.loop();
-    wsloop();
-    restart();
-    APmode();
-
-    if ((millis() - lastStack) > 10000)
-    {
-      
-      lastStack = millis();
-      UBaseType_t stackRemaining = uxTaskGetStackHighWaterMark(NULL);
-      showAPClients();
-    }
-    esp_task_wdt_reset();
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+void loop() {
+    // ปล่อยว่างไว้ เพราะเราใช้ TaskManagement (FreeRTOS)
+    vTaskDelete(NULL); 
 }
 
-/////////////////////////////////////////////////////////////////////////////////////////////
-void TaskLED(void *pvParameters)
-{
-  pinMode(LED, OUTPUT);
+// ---------------------------------------------------------
+// TaskMain: งานประมวลผลหลัก (Core 0)
+// ---------------------------------------------------------
+void TaskMain(void *pvParameters) {
+    esp_task_wdt_add(NULL); // เพิ่มตัวมันเองลงใน Watchdog
+    
+    unsigned long lastDiag = 0;
+    
+    for (;;) {
+        esp_task_wdt_reset();
+        
+        // ฟังก์ชันคำนวณหลัก
+        app_loop();
 
-  while (1)
-  {
-    ledPatternSelect();
-    vTaskDelay(pdMS_TO_TICKS(20)); // 50 Hz
-  }
+        // Home Assistant Diagnostic ทุก 60 วินาที
+        if (millis() - lastDiag > 60000) {
+            lastDiag = millis();
+            HA_Diagnostic();
+            
+            // ตรวจสอบ Stack เพื่อป้องกันโปรแกรมแฮงค์ (Debug)
+            // Serial.printf("[Debug] Main Stack: %u\n", uxTaskGetStackHighWaterMark(NULL));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10)); 
+    }
+}
+
+// ---------------------------------------------------------
+// TaskSub: งานสื่อสาร Network (Core 1)
+// ---------------------------------------------------------
+void TaskSub(void *pvParameters) {
+    esp_task_wdt_add(NULL);
+    
+    unsigned long lastStatus = 0;
+
+    for (;;) {
+        esp_task_wdt_reset();
+        
+        mqtt.loop();
+        wsLoop();
+        APmode_Check();
+
+        // ตรวจสอบสถานะทุก 10 วินาที
+        if (millis() - lastStatus > 10000) {
+            lastStatus = millis();
+            showAPClients();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5)); // ให้เวลาความสำคัญกับ Network สูงหน่อย
+    }
+}
+
+// ---------------------------------------------------------
+// TaskLED: การแสดงผลไฟสถานะ (Core 1)
+// ---------------------------------------------------------
+void TaskLED(void *pvParameters) {
+    // งาน LED มักไม่จำเป็นต้องลงใน WDT เพราะถ้ามันค้างระบบยังทำงานต่อได้
+    for (;;) {
+        ledPatternSelect();
+        vTaskDelay(pdMS_TO_TICKS(20)); 
+    }
 }
