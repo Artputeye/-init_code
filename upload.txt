@@ -1,5 +1,3 @@
+pio run -t erase
 pio run -t uploadfs
 pio run --target upload 
-pio run --target buildfs
-
-python -m esptool --port COM5 erase_flash
